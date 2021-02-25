@@ -14,6 +14,12 @@ import traceback
 
 logging.basicConfig(level=20)
 
+def make_iter():
+    loop = asyncio.get_event_loop()
+    queue = asyncio.Queue()
+    def put(*args):
+        loop.call_soon_threadsafe(queue.put_nowait, args)
+    return queue, put
 
 class Audio(object):
     """Streams raw audio from microphone. Data is received in a separate thread, and stored in a buffer, to be read from."""
@@ -31,8 +37,8 @@ class Audio(object):
                 in_data = self.wf.readframes(self.chunk)
             callback(in_data)
             return (None, pyaudio.paContinue)
-        if callback is None: callback = lambda in_data: self.buffer_queue.put(in_data)
-        self.buffer_queue = queue.Queue()
+        self.buffer_queue, stream_put = make_iter()
+        if callback is None: callback = stream_put
         self.device = device
         self.input_rate = input_rate
         self.sample_rate = self.RATE_PROCESS
@@ -76,14 +82,14 @@ class Audio(object):
         resample16 = np.array(resample, dtype=np.int16)
         return resample16.tostring()
 
-    def read_resampled(self):
+    async def read_resampled(self):
         """Return a block of audio data resampled to 16000hz, blocking if necessary."""
-        return self.resample(data=self.buffer_queue.get(),
+        return self.resample(data=await self.buffer_queue.get(),
                              input_rate=self.input_rate)
 
-    def read(self):
+    async def read(self):
         """Return a block of audio data, blocking if necessary."""
-        return self.buffer_queue.get()
+        return await self.buffer_queue.get()
 
     def destroy(self):
         self.stream.stop_stream()
@@ -111,16 +117,16 @@ class VADAudio(Audio):
         super().__init__(device=device, input_rate=input_rate, file=file)
         self.vad = webrtcvad.Vad(aggressiveness)
 
-    def frame_generator(self):
+    async def frame_generator(self):
         """Generator that yields all audio frames from microphone."""
         if self.input_rate == self.RATE_PROCESS:
             while True:
-                yield self.read()
+                yield await self.read()
         else:
             while True:
-                yield self.read_resampled()
+                yield await self.read_resampled()
 
-    def vad_collector(self, padding_ms=300, ratio=0.75, frames=None):
+    async def vad_collector(self, padding_ms=300, ratio=0.75, frames=None):
         """Generator that yields series of consecutive audio frames comprising each utterence, separated by yielding a single None.
             Determines voice activity by ratio of frames in padding_ms. Uses a buffer to include padding_ms prior to being triggered.
             Example: (frame, ..., frame, None, frame, ..., frame, None, ...)
@@ -131,8 +137,13 @@ class VADAudio(Audio):
         ring_buffer = collections.deque(maxlen=num_padding_frames)
         triggered = False
 
-        for frame in frames:
+        async for frame in frames:
+            #I donno why this suddenly became necessary when making the whole pyaudio stuff async but well
+            frame = frame[0]
             if len(frame) < 640:
+                # print(frame)
+                # yield None
+                # continue
                 return
 
             is_speech = self.vad.is_speech(frame, self.sample_rate)
@@ -162,13 +173,15 @@ def main(vad_aggressiveness, vad_device, vad_rate, source_lang, target_lang):
                          device=vad_device,
                          input_rate=vad_rate)
     print("Listening (ctrl-C to exit)...")
-    frames = vad_audio.vad_collector()
 
     async def translator():
+        frames = vad_audio.vad_collector()
         # Stream from microphone to DeepSpeech using VAD
+        # while True:
+        #     yield await frames.__anext__()
         spinner = Halo(spinner='line')
         wav_data = bytearray()
-        for frame in frames:
+        async for frame in frames:
             if frame is not None:
                 spinner.start()
                 wav_data.extend(frame)
@@ -187,13 +200,20 @@ def main(vad_aggressiveness, vad_device, vad_rate, source_lang, target_lang):
 
     async def send_result(websocket, path):
         result = translator()
-        msg = await result.__anext__()
-        while msg:
+        async for msg in result:
             try:
-                await websocket.send(msg)
-                msg = await result.__anext__()
+                # print(type(msg))
+                await websocket.send("_"+msg)
+                # await websocket.send("hi")
             except Exception:
                 traceback.print_exc()
 
+    # async def test():
+    #     result = translator()
+    #     async for msg in result:
+    #         print(msg)
+
     asyncio.get_event_loop().run_until_complete(websockets.serve(send_result, 'localhost', 8765))
+    # asyncio.get_event_loop().run_until_complete(test())
     asyncio.get_event_loop().run_forever()
+    # translator()

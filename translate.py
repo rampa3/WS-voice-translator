@@ -2,6 +2,8 @@ from easynmt import EasyNMT
 
 print("Loading translation model...")
 model = EasyNMT('mbart50_m2m')
+# model = EasyNMT("opus-mt")
+# model = EasyNMT('m2m_100_1.2B')
 print("Translation model loaded.")
 
 
