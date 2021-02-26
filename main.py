@@ -1,7 +1,5 @@
 import capture
 import csv
-import websockets
-import asyncio
 
 print("HI")
 with open('settings.csv') as csv_file:
