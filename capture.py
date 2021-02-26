@@ -11,6 +11,7 @@ import translate
 import websockets
 import asyncio
 import traceback
+import punctuate
 
 logging.basicConfig(level=20)
 
@@ -191,9 +192,10 @@ def main(vad_aggressiveness, vad_device, vad_rate, source_lang, target_lang):
                 vad_audio.write_wav(vad_file, wav_data)
                 wav_data = bytearray()
                 text = transcribe.transcribe(vad_file)
-                print("Recognized: %s" % text)
-                yield text
-                translation = translate.translate(text, source_lang, target_lang)
+                punctuated = punctuate.punctuate(text.lower())
+                print("Recognized: %s" % punctuated)
+                yield punctuated
+                translation = translate.translate(punctuated, source_lang, target_lang)
                 print("Translation: %s" % translation)
                 yield translation
                 os.remove(vad_file)
